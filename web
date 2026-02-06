@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DynnHOSTING | CDN Downloader Fix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { background: #000; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
+        .progress-bar { transition: width 0.4s ease; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 10px; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="max-w-2xl w-full glass p-8 rounded-3xl shadow-2xl shadow-blue-500/10">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">DynnHOSTING</h1>
+            <p class="text-gray-500 text-sm mt-1">Otomatis Unduh Folder dari JSDelivr/GitHub</p>
+        </div>
+
+        <div class="space-y-4">
+            <input type="text" id="urlInput" placeholder="Masukkan URL: https://cdn.jsdelivr.net/gh/user/repo@main/folder/" 
+                class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm font-mono">
+            
+            <button onclick="fetchAndDownload()" id="btnAction" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-xl font-bold tracking-wide transition-all shadow-lg shadow-blue-600/30">
+                START DOWNLOAD
+            </button>
+        </div>
+
+        <div id="statusArea" class="mt-8 hidden">
+            <div class="flex justify-between text-xs mb-2">
+                <span id="statusLabel" class="text-blue-400 font-bold uppercase">Ready</span>
+                <span id="percentText" class="text-white">0%</span>
+            </div>
+            <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden mb-6">
+                <div id="progressBar" class="progress-bar bg-blue-500 h-full w-0"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 h-64">
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-gray-500 mb-2 font-bold uppercase tracking-widest">Found in Repo</span>
+                    <ul id="foundList" class="bg-black/40 p-3 rounded-xl overflow-y-auto flex-1 text-[10px] font-mono text-gray-400 space-y-1"></ul>
+                </div>
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-green-500 mb-2 font-bold uppercase tracking-widest">Downloaded</span>
+                    <ul id="downloadedList" class="bg-black/40 p-3 rounded-xl overflow-y-auto flex-1 text-[10px] font-mono text-green-500/70 space-y-1"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchAndDownload() {
+            const input = document.getElementById('urlInput').value.trim();
+            const btn = document.getElementById('btnAction');
+            const foundList = document.getElementById('foundList');
+            const downloadedList = document.getElementById('downloadedList');
+            const progressBar = document.getElementById('progressBar');
+            const statusArea = document.getElementById('statusArea');
+
+            if (!input.includes('cdn.jsdelivr.net/gh/')) {
+                alert("URL tidak valid! Gunakan format cdn.jsdelivr.net/gh/...");
+                return;
+            }
+
+            // UI Reset
+            btn.disabled = true;
+            btn.innerText = "PROCESSING...";
+            statusArea.classList.remove('hidden');
+            foundList.innerHTML = "";
+            downloadedList.innerHTML = "";
+
+            try {
+                // 1. Parsing URL untuk mencari User, Repo, Branch, dan Folder
+                const urlObj = input.replace('https://cdn.jsdelivr.net/gh/', '');
+                const parts = urlObj.split('/');
+                const userRepo = parts[0]; // cdn-aryatqhio/css@main
+                const [user, repoWithBranch] = userRepo.split('/'); // Ini salah satu titik error, kita perbaiki:
+                
+                const owner = parts[0];
+                const repoFull = parts[1] || "";
+                const [repo, branch] = repoFull.includes('@') ? repoFull.split('@') : [repoFull, 'main'];
+                
+                // Jika URL seperti https://cdn.jsdelivr.net/gh/cdn-aryatqhio/css@main/2/
+                // Owner: cdn-aryatqhio, Repo: css, Branch: main, Folder: 2
+                const actualOwner = owner;
+                const actualRepo = repo.replace(/@.*/, ''); 
+                const actualBranch = repoFull.split('@')[1] || 'main';
+                const folderPath = parts.slice(2).join('/').replace(/\/$/, "");
+
+                document.getElementById('statusLabel').innerText = "Scanning GitHub API...";
+                
+                // 2. Ambil Tree dari GitHub
+                const api = `https://api.github.com/repos/${actualOwner}/${actualRepo}/git/trees/${actualBranch}?recursive=1`;
+                const res = await fetch(api);
+                const data = await res.json();
+
+                if (!data.tree) throw new Error("Gagal mengambil data dari GitHub. Cek URL Anda.");
+
+                // 3. Filter file yang ada di dalam folder yang diminta
+                const targets = data.tree.filter(item => 
+                    item.type === 'blob' && item.path.startsWith(folderPath)
+                );
+
+                if (targets.length === 0) throw new Error("Tidak ada file ditemukan di folder tersebut.");
+
+                targets.forEach(t => {
+                    const li = document.createElement('li');
+                    li.innerText = "> " + t.path;
+                    foundList.appendChild(li);
+                });
+
+                // 4. Proses Download
+                const zip = new JSZip();
+                let successCount = 0;
+
+                for (const target of targets) {
+                    const dlUrl = `https://cdn.jsdelivr.net/gh/${actualOwner}/${actualRepo}@${actualBranch}/${target.path}`;
+                    try {
+                        const fileBlob = await fetch(dlUrl).then(r => r.blob());
+                        // Simpan ke ZIP dengan struktur folder yang bersih
+                        const zipPath = target.path.replace(folderPath, "").replace(/^\//, "");
+                        zip.file(zipPath || target.path.split('/').pop(), fileBlob);
+
+                        successCount++;
+                        const p = Math.round((successCount / targets.length) * 100);
+                        progressBar.style.width = p + "%";
+                        document.getElementById('percentText').innerText = p + "%";
+
+                        const li = document.createElement('li');
+                        li.innerText = "✓ " + (zipPath || target.path.split('/').pop());
+                        downloadedList.prepend(li);
+                    } catch (e) {
+                        console.error("Gagal ambil: " + target.path);
+                    }
+                }
+
+                // 5. Generate ZIP
+                document.getElementById('statusLabel').innerText = "Zipping Files...";
+                const content = await zip.generateAsync({ type: "blob" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(content);
+                a.download = `DynnHOSTING_${actualRepo}_folder.zip`;
+                a.click();
+
+                document.getElementById('statusLabel').innerText = "Success!";
+                btn.disabled = false;
+                btn.innerText = "DOWNLOAD LAGI";
+
+            } catch (err) {
+                alert(err.message);
+                btn.disabled = false;
+                btn.innerText = "COBA LAGI";
+            }
+        }
+    </script>
+</body>
+</html>
